@@ -43,42 +43,42 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
   const model = "gemini-2.5-flash"; 
   
-  // FINAL RECOVERY STRATEGY: AUTHORITY SOURCE ONLY
-  // The previous method "guessed" games. This method forces the AI to look at 
-  // trusted databases (ESPNcricinfo, Cricbuzz, BCCI) and only report what it sees.
-  
-  const prompt = `
-    You are a data extraction engine for Cricket Stats.
-    
-    TARGET PLAYER: "${player.name}"
-    TEAM: "${player.smatTeam}"
-    TOURNAMENT: Syed Mushtaq Ali Trophy 2025 (SMAT)
-    DATE RANGE: Nov 2025 - Dec 2025
+  // STRICT PROMPT BASED ON USER SPECIFICATION
+  // We use systemInstruction to enforce the protocol.
+  const SYSTEM_PROMPT = `
+    Your job is to reliably fetch and aggregate Syed Mushtaq Ali Trophy (SMAT) 2025-26 stats for a single domestic Indian player who is also in the IPL 2026 squads. 
+    You must only return information that can be verifiably sourced from official/canonical scorecards and you must never guess.
 
-    **YOUR TASK:**
-    1. Search SPECIFICALLY for the scorecard profile on trusted sites.
-    2. Extract the exact scores from the most recent matches.
-    
-    **SEARCH QUERY:**
-    site:espncricinfo.com OR site:cricbuzz.com OR site:bcci.tv "${player.name}" "${player.smatTeam}" Syed Mushtaq Ali Trophy 2025 scorecard
+    ### Scope & Sources (HARD REQUIREMENTS)
+    1. **Tournament scope**: Only use matches from "Syed Mushtaq Ali Trophy 2025-26" (India domestic T20). Ignore IPL, other domestic comps, friendlies, warm-ups.
+    2. **Date window**: Only include matches from 26 Nov 2025 00:00 IST to now (IST).
+    3. **Allowed domains**:
+       - Primary: \`site:espncricinfo.com\` Full Scorecard pages.
+       - Fallback: \`site:bcci.tv\` match/scorecard pages.
+    4. **Mandatory verification**: Use the match ID embedded in the URL to deduplicate. The page title must explicitly mention SMAT 2025-26.
 
-    **CRITICAL RULES (ZERO HALLUCINATION):**
-    1. **NO PREDICTIONS**: Ignore "Fantasy Tips", "Predicted XI", or "Dream11" articles. They contain fake stats.
-    2. **STRICT MATCHING**: Only log a match if you see a **Scorecard Result**.
-    3. **RUNS vs BALLS**: 
-       - Text "14(10)" means **14 Runs** (10 Balls).
-       - Text "10(14)" means **10 Runs** (14 Balls).
-       - ALWAYS prioritize the first number as Runs unless the text explicitly says "10 runs off 14 balls".
-    4. **DNB (Did Not Bat)**: If a player played but didn't bat, Runs = 0, Innings = 0.
-    5. **NO FAKE GAMES**: If the search results only show 2 games, output 2 games. Do not invent a 3rd game to fill space.
+    ### Disambiguation (HARD REQUIREMENTS)
+    - Use the state team provided (e.g. "${player.smatTeam}") to confirm the correct person.
+    - If the lineup on the scorecard does not include the player for the state team, do not attribute any stats for that match.
+    - If multiple people with the same name appear, only count the one on the specific state team.
 
-    **OUTPUT JSON FORMAT:**
+    ### Quality & Anti-Hallucination Rules
+    - **No invented matches**: Only include matches with a verified SMAT 2025-26 Full Scorecard URL.
+    - **No partial guessing**: If a number is not visible, set it to 0 or null.
+    - **Parsing Rule**: "14(10)" in cricket notation usually means 14 Runs off 10 Balls. "10(14)" means 10 Runs off 14 Balls. Prioritize the first number as runs unless context says "off".
+    - **Search Strategy**:
+       1. Search for Team Fixtures first to identify played matches.
+       2. Search for Player Scorecards specifically for those matches.
+       3. Count matches found since 26 Nov 2025. If < 6, add a note in summary.
+
+    ### Output Format
+    Return ONLY the following JSON structure:
     {
       "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
       "matches": number, 
       "innings": number,
       "runs": number, 
-      "ballsFaced": number,
+      "ballsFaced": number, 
       "battingAverage": number, 
       "battingStrikeRate": number, 
       "highestScore": string, 
@@ -86,31 +86,47 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
       "wickets": number, 
       "runsConceded": number,
       "overs": number,
-      "economy": number,
+      "economy": number, 
       "bestBowling": string,
 
       "recentMatches": [
          { 
-           "date": "Date/Month", 
-           "opponent": "vs Team", 
+           "date": "MMM DD", 
+           "opponent": "vs TeamName", 
            "performance": "e.g. 45(30) & 0/15" 
          }
       ],
-      "summary": "One sentence summary of verified matches."
+      "summary": "Brief verification note. Mention if any matches were unresolved or excluded."
     }
+  `;
+
+  const USER_CONTENT = `
+    PARAMETERS:
+    player_name: "${player.name}"
+    state_team: "${player.smatTeam}"
+    tournament: "Syed Mushtaq Ali Trophy 2025-26"
+    
+    EXECUTE SEARCH STRATEGY:
+    1. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" "Full Scorecard"
+    2. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "Full Scorecard" "${player.smatTeam}" "Match"
+    3. (Fallback) site:bcci.tv "Syed Mushtaq Ali Trophy" "${player.smatTeam}" "Scorecard"
   `;
 
   let attempts = 0;
   const maxAttempts = 3;
-  let delay = 2000;
+  let delay = 3000;
 
   while (attempts < maxAttempts) {
     try {
+      // We use thinkingConfig to force the model to 'plan' the search steps (S1, S2, S3) 
+      // ensuring it doesn't hallucinate a game just to fill a quota.
       const response = await ai.models.generateContent({
         model: model,
-        contents: prompt,
+        contents: USER_CONTENT,
         config: {
+          systemInstruction: SYSTEM_PROMPT,
           tools: [{ googleSearch: {} }],
+          thinkingConfig: { thinkingBudget: 4096 } 
         },
       });
 
