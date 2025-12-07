@@ -44,66 +44,62 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
   const model = "gemini-2.5-flash"; 
   
   // STRATEGY:
-  // 1. Force search on reliable domains (ESPNcricinfo, Cricbuzz, BCCI).
-  // 2. Force the model to calculate totals from the match log to avoid discrepancies.
+  // 1. Strict Source: ESPNcricinfo OR BCCI.tv ONLY. (Explicitly ban Cricbuzz to avoid inconsistencies).
+  // 2. Strict Date/Tournament: Syed Mushtaq Ali Trophy 2025 (SMAT 2025). Start Date: Nov 26, 2025.
+  // 3. Manual Summation: AI must calculate totals from the match log to ensure 100% consistency.
   const prompt = `
     Act as a strict Cricket Statistician.
     
     Target Player: "${player.name}"
     State Team: "${player.smatTeam}"
-    Tournament: "Syed Mushtaq Ali Trophy" (Current Season, matches started Nov 26).
+    Tournament: "Syed Mushtaq Ali Trophy" (SMAT) - 2025/26 Season.
     
-    INSTRUCTIONS:
-    1. SEARCH: Perform a targeted search for "${player.name}" profile and match log on 'ESPNcricinfo', 'Cricbuzz', or 'BCCI.tv'.
-       Query hint: "site:espncricinfo.com ${player.name} Syed Mushtaq Ali Trophy 2024 2025 match log"
+    CRITICAL REQUIREMENTS:
+    1. **START DATE**: The tournament fixture for this player's team started on **Nov 26, 2025**.
+       - You MUST include the match played on Nov 26, 2025.
+       - You MUST include ALL matches played after that date.
+       - Ignore any matches from 2024 or earlier.
+    
+    2. **SOURCES**: Use ONLY **espncricinfo.com** or **bcci.tv**.
+       - **DO NOT USE CRICBUZZ.**
+       - **DO NOT USE WIKIPEDIA.**
        
-    2. EXTRACT: Find the match-by-match list for this specific tournament.
-       - Look for matches played since November 26th.
-       - Ignore matches from previous years or other formats (like Ranji/Vijay Hazare).
-       - This is a T20 tournament.
+    3. **METHODOLOGY**:
+       - Search for: "site:espncricinfo.com OR site:bcci.tv ${player.name} ${player.smatTeam} Syed Mushtaq Ali Trophy 2025 match log"
+       - Extract the specific score for EVERY match found since Nov 26, 2025.
+       - **CALCULATE TOTALS MANUALLY**: Sum the runs and wickets from your extracted list. Do not trust the "Total" row on the webpage as it might be cached.
     
-    3. CALCULATE (Crucial):
-       - Do NOT trust the "Total Runs" summary header on the page, as it might be outdated.
-       - FIRST, extract the score for EVERY match played.
-       - SECOND, SUM the runs and wickets yourself to populate the cumulative stats.
-       - If a player played but did not bat, count it as 0 runs (DNB).
-       - If a player played but did not bowl, count it as 0 wickets.
-    
-    4. DATA CONSISTENCY CHECK:
-       - The length of "recentMatches" MUST equal the "matches" count.
-       - The sum of runs in "recentMatches" MUST equal "runs".
+    4. **CONSISTENCY CHECK**:
+       - Ensure the "matches" count equals the number of items in "recentMatches".
+       - Ensure the "runs" total equals the sum of runs in "recentMatches".
 
-    OUTPUT:
-    Return a strictly valid JSON object with this schema:
+    OUTPUT (Strict JSON):
     {
       "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
-      "matches": number, // Count of items in recentMatches
-      
-      // Calculated Totals
+      "matches": number, 
       "innings": number,
-      "runs": number, // SUM of runs from recentMatches
+      "runs": number, // MUST equal sum of recentMatches runs
       "ballsFaced": number,
       "battingAverage": number, 
       "battingStrikeRate": number, 
       "highestScore": string, 
 
       "overs": number,
-      "wickets": number, // SUM of wickets from recentMatches
+      "wickets": number, // MUST equal sum of recentMatches wickets
       "runsConceded": number,
       "economy": number,
       "bowlingAverage": number,
       "bowlingStrikeRate": number,
       "bestBowling": string,
 
-      // Chronological Match Log (Oldest to Newest, or Newest to Oldest - just be consistent)
       "recentMatches": [
          { 
-           "date": "MMM DD", 
+           "date": "MMM DD", // e.g. "Nov 26"
            "opponent": "vs TeamName", 
            "performance": "e.g. '12(8) & 0/20(4)' or 'DNB'" 
          }
       ],
-      "summary": "Brief summary of form based on the match log."
+      "summary": "One sentence summary mentioning the source used."
     }
   `;
 
