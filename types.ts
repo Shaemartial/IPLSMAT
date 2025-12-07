@@ -23,6 +23,7 @@ export interface DetailedStats {
   // Meta
   matches: number;
   lastUpdated: string;
+  sourceUrl?: string;
   
   // Batting
   innings?: number;

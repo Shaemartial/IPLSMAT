@@ -27,13 +27,24 @@ const PlayerCard: React.FC<PlayerCardProps> = ({ player, onUpdate }) => {
   const showBatting = player.role === 'Batsman' || player.role === 'All-Rounder' || player.role === 'Wicket Keeper' || (stats.runs && stats.runs > 0);
   const showBowling = player.role === 'Bowler' || player.role === 'All-Rounder' || (stats.wickets && stats.wickets > 0);
 
+  // Helper to extract domain from source URL
+  const getSourceDomain = (url?: string) => {
+    if (!url) return null;
+    try {
+      return new URL(url).hostname.replace('www.', '');
+    } catch {
+      return 'Source';
+    }
+  };
+
   const handleUpdate = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setLoading(true);
     try {
-      const { stats: newStats, role } = await fetchLatestPlayerStats(player);
+      const { stats: newStats, role, source } = await fetchLatestPlayerStats(player);
       if (newStats) {
-        onUpdate(player.id, { ...player.stats, ...newStats }, role);
+        // We inject the source into the stats object for display
+        onUpdate(player.id, { ...player.stats, ...newStats, sourceUrl: source }, role);
         setExpanded(true); // Auto expand on update
       }
     } catch (e: any) {
@@ -187,8 +198,20 @@ const PlayerCard: React.FC<PlayerCardProps> = ({ player, onUpdate }) => {
               </div>
             )}
             
-            <div className="mt-2 text-[9px] text-slate-600 text-right">
-              Last fetched: {stats.lastUpdated ? new Date(stats.lastUpdated).toLocaleTimeString() : 'Never'}
+            <div className="mt-4 flex justify-between items-end border-t border-slate-800 pt-2">
+              <div className="text-[9px] text-slate-600">
+                Last fetched: {stats.lastUpdated ? new Date(stats.lastUpdated).toLocaleTimeString() : 'Never'}
+              </div>
+              {stats.sourceUrl && (
+                <a 
+                  href={stats.sourceUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-[9px] text-blue-500 hover:text-blue-400 underline decoration-blue-500/30"
+                >
+                  Source: {getSourceDomain(stats.sourceUrl)}
+                </a>
+              )}
             </div>
           </div>
         )}
