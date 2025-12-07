@@ -43,51 +43,47 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
   const model = "gemini-2.5-flash"; 
   
-  // STRATEGY ADJUSTMENT:
-  // 1. Explicitly list POTENTIAL dates to help AI 'hunt' for missing games in the text.
-  // 2. Broaden search to "2025" to catch all variations of "2025/26" or "2025 season".
-  // 3. Force "Deep Scan" instruction.
+  // STRATEGY: FIXTURE-FIRST DISCOVERY
+  // Instead of asking "How did Player X do?", we ask "What are the results for Team Y?".
+  // Then we map Player X to those results. This ensures we don't miss games where the player failed or was quiet.
   
   const prompt = `
-    Act as a Cricket Statistician.
+    Act as a strict Cricket Data Auditor.
     
-    TARGET: "${player.name}"
-    TEAM: "${player.smatTeam}"
-    TOURNAMENT: Syed Mushtaq Ali Trophy 2025/26 (Matches in Nov-Dec 2025).
+    **OBJECTIVE**: 
+    Build a COMPLETE match log for Player: "${player.name}" 
+    Playing for Team: "${player.smatTeam}" 
+    Tournament: Syed Mushtaq Ali Trophy 2025 (SMAT).
 
-    **CRITICAL GOAL**:
-    You must find the COMPLETE list of matches played by this player in this tournament.
-    Teams usually play 6-7 Group Matches.
-    Common Match Dates in this schedule (Check text for these dates):
-    - Nov 23
-    - Nov 25 / Nov 26
-    - Nov 27 / Nov 28
-    - Nov 29 / Nov 30
-    - Dec 2 / Dec 3
-    - Dec 5 / Dec 6
-    - Dec 9 (Knockouts)
+    **THE PROBLEM**: 
+    Simple searches often miss games. You must verify the FULL schedule.
 
-    **INSTRUCTIONS**:
-    1. **SEARCH**: 
-       Execute a search for: "${player.name} ${player.smatTeam} Syed Mushtaq Ali Trophy 2025 matches score list espncricinfo bcci"
+    **YOUR EXECUTION PLAN (Fixture-First Strategy)**:
+    1.  **STEP 1: FIND THE TEAM SCHEDULE**
+        - Search for the full list of match results for the team "**${player.smatTeam}**" in SMAT 2025 (Nov & Dec).
+        - Teams in this tournament typically play 5 to 7 Group Matches. 
+        - Find the results for ALL of them.
     
-    2. **EXTRACTION**:
-       - Scan the search results for ANY of the dates listed above.
-       - **DO NOT STOP** after finding 1 or 2 matches. Look for the full history.
-       - If a match happened on Dec 2, Dec 6, etc., it MUST be included.
-       - Ignore matches from previous years (2024 or earlier). Only Nov/Dec 2025.
-    
-    3. **PARSING RULES**:
-       - **1 Run**: "1(5)" or "1" -> 1 Run. (Do not confuse with 0).
-       - **0 Runs**: "0(4)" or "duck" -> 0 Runs.
-       - **Wickets**: "3/24" -> 3 Wickets.
-       - **DNB**: Did Not Bat -> 0 Runs, 0 Innings.
-    
-    4. **CALCULATION**:
-       - Sum the Runs and Wickets from the extracted list MANUALLY.
-       - Do NOT rely on the "Total" row from the site as it might be outdated. Calculate: Sum(Match 1 + Match 2 + ...).
+    2.  **STEP 2: CHECK PLAYER PARTICIPATION**
+        - For *each* match found in Step 1, check the scorecard.
+        - Did **${player.name}** play? 
+        - If YES: Extract runs, balls, wickets, overs.
+        - If NO: Ignore the match.
 
-    OUTPUT (JSON):
+    3.  **STEP 3: COMPILE STATS**
+        - Sum the data from the matches found.
+        - **DO NOT** rely on pre-calculated "Total" rows from websites as they might be outdated. Calculate the sum yourself.
+
+    **SEARCH QUERY**:
+    "${player.smatTeam} cricket team Syed Mushtaq Ali Trophy 2025 match results scorecard ${player.name}"
+
+    **STRICT PARSING RULES**:
+    - **Format**: T20 Only (Exclude Ranji/Hazare).
+    - **Dates**: Nov 2025 - Dec 2025.
+    - **Batting**: "14(10)" = 14 Runs. "0(3)" = 0 Runs. "DNB" = 0 Runs, 0 Innings.
+    - **Bowling**: "3/20" = 3 Wickets. "0/40" = 0 Wickets.
+    
+    **OUTPUT JSON**:
     {
       "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
       "matches": number, 
@@ -98,22 +94,20 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
       "battingStrikeRate": number, 
       "highestScore": string, 
 
-      "overs": number,
       "wickets": number, 
       "runsConceded": number,
+      "overs": number,
       "economy": number,
-      "bowlingAverage": number,
-      "bowlingStrikeRate": number,
       "bestBowling": string,
 
       "recentMatches": [
          { 
            "date": "MMM DD", 
            "opponent": "vs TeamName", 
-           "performance": "e.g. '1(6) & 0/12' or 'DNB'" 
+           "performance": "e.g. 45(30) & 0/15" 
          }
       ],
-      "summary": "Brief stats summary (e.g. 'Played 5 matches, consistent wicket-taker')."
+      "summary": "Brief summary. Mention if they missed any games."
     }
   `;
 
