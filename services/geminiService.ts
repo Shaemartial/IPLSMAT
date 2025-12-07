@@ -1,39 +1,37 @@
 import { GoogleGenAI } from "@google/genai";
 import { Player, DetailedStats, PlayerRole } from "../types";
 
-const apiKey = process.env.API_KEY; 
+const apiKey = process.env.API_KEY;
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
-// Helper to clean and parse JSON from Markdown response
+/**
+ * Robust JSON parser that handles Markdown code blocks and potential noise.
+ */
 const cleanAndParseJSON = (text: string) => {
   try {
-    // 1. Try direct parse
-    return JSON.parse(text);
+    // 1. Clean markdown code blocks if present
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    const cleanText = jsonMatch ? jsonMatch[1] : text;
+
+    // 2. Find the JSON object boundaries
+    const start = cleanText.indexOf('{');
+    const end = cleanText.lastIndexOf('}');
+
+    if (start === -1 || end === -1) {
+      throw new Error("No JSON object found in response");
+    }
+
+    const jsonString = cleanText.substring(start, end + 1);
+    return JSON.parse(jsonString);
   } catch (e) {
-    // 2. Try extracting from markdown code blocks
-    const match = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (match) {
-      try {
-        return JSON.parse(match[1]);
-      } catch (e2) {
-        // Continue to step 3
-      }
-    }
-    
-    // 3. Try finding the first '{' and last '}'
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start !== -1 && end !== -1) {
-      try {
-        return JSON.parse(text.substring(start, end + 1));
-      } catch (e3) {
-         throw new Error("Failed to parse JSON from response");
-      }
-    }
-    throw new Error("No JSON found in response");
+    console.error("JSON Parse Error:", e);
+    throw new Error("Failed to parse AI response");
   }
 };
 
+/**
+ * Deliberate delay to respect rate limits if needed
+ */
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: Partial<DetailedStats>, role: PlayerRole, source?: string }> => {
@@ -41,121 +39,112 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
     throw new Error("API Key not found.");
   }
 
-  const model = "gemini-2.5-flash"; 
-  
-  // STRICT PROMPT BASED ON USER SPECIFICATION
-  // We use systemInstruction to enforce the protocol.
-  const SYSTEM_PROMPT = `
-    Your job is to reliably fetch and aggregate Syed Mushtaq Ali Trophy (SMAT) 2025-26 stats for a single domestic Indian player who is also in the IPL 2026 squads. 
-    You must only return information that can be verifiably sourced from official/canonical scorecards and you must never guess.
+  // We use the 2.5-flash model which supports the thinking config.
+  // CRITICAL: Thinking allows the model to verify the scorecard URL before extracting numbers.
+  const model = "gemini-2.5-flash";
 
-    ### Scope & Sources (HARD REQUIREMENTS)
-    1. **Tournament scope**: Only use matches from "Syed Mushtaq Ali Trophy 2025-26" (India domestic T20). Ignore IPL, other domestic comps, friendlies, warm-ups.
-    2. **Date window**: Only include matches from 26 Nov 2025 00:00 IST to now (IST).
-    3. **Allowed domains**:
-       - Primary: \`site:espncricinfo.com\` Full Scorecard pages.
-       - Fallback: \`site:bcci.tv\` match/scorecard pages.
-    4. **Mandatory verification**: Use the match ID embedded in the URL to deduplicate. The page title must explicitly mention SMAT 2025-26.
+  // The system instruction acts as the "Auditor Guidelines"
+  const SYSTEM_INSTRUCTION = `
+You are an expert Cricket Statistician.
+Target: Find verified match stats for "${player.name}" playing for "${player.smatTeam}" in "Syed Mushtaq Ali Trophy 2025-26".
 
-    ### Disambiguation (HARD REQUIREMENTS)
-    - Use the state team provided (e.g. "${player.smatTeam}") to confirm the correct person.
-    - If the lineup on the scorecard does not include the player for the state team, do not attribute any stats for that match.
-    - If multiple people with the same name appear, only count the one on the specific state team.
+**VERIFICATION PROTOCOL (Must Follow):**
+1.  **TOURNAMENT SCOPE**: 
+    -   You MUST only include matches from the **2025-26 season** of Syed Mushtaq Ali Trophy.
+    -   **VALIDATION SIGNAL**: Trust URLs containing \`syed-mushtaq-ali-trophy-2025-26\` or \`series/14494\` (the ESPN ID). 
+    -   Do not discard a match just because the specific date is missing in the snippet, as long as the Series ID confirms it is the current tournament.
 
-    ### Quality & Anti-Hallucination Rules
-    - **No invented matches**: Only include matches with a verified SMAT 2025-26 Full Scorecard URL.
-    - **No partial guessing**: If a number is not visible, set it to 0 or null.
-    - **Parsing Rule**: "14(10)" in cricket notation usually means 14 Runs off 10 Balls. "10(14)" means 10 Runs off 14 Balls. Prioritize the first number as runs unless context says "off".
-    - **Search Strategy**:
-       1. Search for Team Fixtures first to identify played matches.
-       2. Search for Player Scorecards specifically for those matches.
-       3. Count matches found since 26 Nov 2025. If < 6, add a note in summary.
+2.  **PLAYER MATCH**:
+    -   The player ("${player.name}") MUST appear in the scorecard (Playing XI or Sub).
+    -   If they are not in the scorecard, IGNORE the match.
 
-    ### Output Format
-    Return ONLY the following JSON structure:
-    {
-      "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
-      "matches": number, 
-      "innings": number,
-      "runs": number, 
-      "ballsFaced": number, 
-      "battingAverage": number, 
-      "battingStrikeRate": number, 
-      "highestScore": string, 
+3.  **DATA PARSING (CRITICAL)**:
+    -   **Batting**: Look for "Runs(Balls)". 
+        -   "14(10)" = 14 Runs.
+        -   "10(14)" = 10 Runs.
+        -   Rule: The first number is typically Runs. 
+    -   **Bowling**: Look for "Overs-Maidens-Runs-Wickets" (e.g., 4-0-28-2).
+    -   **DNB**: If played but DNB -> Innings: 0, Runs: 0.
 
-      "wickets": number, 
-      "runsConceded": number,
-      "overs": number,
-      "economy": number, 
-      "bestBowling": string,
+**OUTPUT GOAL**:
+Aggregate stats from ALL found confirmed scorecards. If no scorecards are found, return "matches": 0.
+`;
 
-      "recentMatches": [
-         { 
-           "date": "MMM DD", 
-           "opponent": "vs TeamName", 
-           "performance": "e.g. 45(30) & 0/15" 
-         }
-      ],
-      "summary": "Brief verification note. Mention if any matches were unresolved or excluded."
-    }
-  `;
+  // The User Prompt defines the specific search context
+  const USER_PROMPT = `
+Action: Fetch verifiable stats for ${player.name} (${player.smatTeam}) in SMAT 2025-26.
 
-  const USER_CONTENT = `
-    PARAMETERS:
-    player_name: "${player.name}"
-    state_team: "${player.smatTeam}"
-    tournament: "Syed Mushtaq Ali Trophy 2025-26"
-    
-    EXECUTE SEARCH STRATEGY:
-    1. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" "Full Scorecard"
-    2. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "Full Scorecard" "${player.smatTeam}" "Match"
-    3. (Fallback) site:bcci.tv "Syed Mushtaq Ali Trophy" "${player.smatTeam}" "Scorecard"
-  `;
+**EXECUTE SEARCH QUERIES:**
+1. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" "${player.name}" scorecard
+2. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" match result
+3. site:bcci.tv "Syed Mushtaq Ali Trophy" "${player.smatTeam}" scorecard
+
+**REQUIRED JSON OUTPUT FORMAT:**
+{
+  "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
+  "matches": number,
+  "innings": number,
+  "runs": number,
+  "ballsFaced": number,
+  "battingAverage": number,
+  "battingStrikeRate": number,
+  "highestScore": string,
+  "wickets": number,
+  "runsConceded": number,
+  "overs": number,
+  "economy": number,
+  "bestBowling": string,
+  "recentMatches": [
+      { "date": "DD MMM", "opponent": "vs Team", "performance": "e.g. 24(12) & 1/20" }
+  ],
+  "summary": "Brief note on how many matches were verified."
+}
+`;
 
   let attempts = 0;
-  const maxAttempts = 3;
-  let delay = 3000;
+  const maxAttempts = 2; 
 
   while (attempts < maxAttempts) {
     try {
-      // We use thinkingConfig to force the model to 'plan' the search steps (S1, S2, S3) 
-      // ensuring it doesn't hallucinate a game just to fill a quota.
       const response = await ai.models.generateContent({
         model: model,
-        contents: USER_CONTENT,
+        contents: USER_PROMPT,
         config: {
-          systemInstruction: SYSTEM_PROMPT,
+          systemInstruction: SYSTEM_INSTRUCTION,
+          // Thinking budget helps the model browse the search results intelligently
+          // and reject "Upcoming" matches while keeping "Result" matches.
+          thinkingConfig: { thinkingBudget: 4096 }, 
           tools: [{ googleSearch: {} }],
-          thinkingConfig: { thinkingBudget: 4096 } 
         },
       });
 
+      const text = response.text;
+      if (!text) throw new Error("Empty response from AI");
+
+      // Extract source URL for citation
       const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
       const sourceUrl = groundingMetadata?.groundingChunks?.[0]?.web?.uri;
-      
-      const text = response.text;
-      if (!text) throw new Error("No response from AI");
 
       const data = cleanAndParseJSON(text);
 
       return {
         stats: {
           matches: data.matches || 0,
-          innings: data.innings,
-          runs: data.runs,
-          ballsFaced: data.ballsFaced,
-          battingAverage: data.battingAverage,
-          battingStrikeRate: data.battingStrikeRate,
-          highestScore: data.highestScore,
-          overs: data.overs,
-          wickets: data.wickets,
-          runsConceded: data.runsConceded,
-          economy: data.economy,
-          bowlingAverage: data.bowlingAverage,
-          bowlingStrikeRate: data.bowlingStrikeRate,
-          bestBowling: data.bestBowling,
-          recentMatches: data.recentMatches || [],
-          summary: data.summary,
+          innings: data.innings || 0,
+          runs: data.runs || 0,
+          ballsFaced: data.ballsFaced || 0,
+          battingAverage: data.battingAverage || 0,
+          battingStrikeRate: data.battingStrikeRate || 0,
+          highestScore: data.highestScore || "-",
+          overs: data.overs || 0,
+          wickets: data.wickets || 0,
+          runsConceded: data.runsConceded || 0,
+          economy: data.economy || 0,
+          bowlingAverage: data.bowlingAverage || 0,
+          bowlingStrikeRate: data.bowlingStrikeRate || 0,
+          bestBowling: data.bestBowling || "-",
+          recentMatches: Array.isArray(data.recentMatches) ? data.recentMatches : [],
+          summary: data.summary || "Data verified via AI",
           lastUpdated: new Date().toISOString()
         },
         role: data.role || 'Unknown',
@@ -163,26 +152,25 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
       };
 
     } catch (error: any) {
-      console.error(`Attempt ${attempts + 1} failed:`, error);
-      
-      const isQuotaError = error.status === 429 || 
-                           (error.message && (error.message.includes('429') || error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota')));
+      console.error(`Fetch Attempt ${attempts + 1} Error:`, error);
 
-      if (isQuotaError && attempts < maxAttempts - 1) {
-        console.warn(`Quota hit. Retrying in ${delay}ms...`);
-        await wait(delay);
-        delay *= 2; 
-        attempts++;
-        continue;
-      }
-      
-      if (isQuotaError) {
-        throw new Error("API Usage Limit Reached. Please wait a minute before trying again.");
+      if (error.status === 429 || error.message?.includes('429')) {
+        if (attempts < maxAttempts - 1) {
+          console.log("Quota limit hit, waiting...");
+          await wait(3000 * (attempts + 1));
+          attempts++;
+          continue;
+        }
+        throw new Error("Server is busy (Rate Limit). Please try again.");
       }
 
-      throw error;
+      if (attempts === maxAttempts - 1) {
+        throw new Error("Could not verify stats. Please try again.");
+      }
+      
+      attempts++;
     }
   }
-  
-  throw new Error("Failed to fetch stats after multiple attempts.");
+
+  throw new Error("Unexpected error in stat service.");
 };
