@@ -1,0 +1,5 @@
+{
+  "name": "IPL x SMAT 2026 Tracker",
+  "description": "A tracker for IPL 2026 squad players currently participating in the Syed Mushtaq Ali Trophy (SMAT) 2025/26. Features player filtering and AI-powered stat updates.",
+  "requestFramePermissions": []
+}
