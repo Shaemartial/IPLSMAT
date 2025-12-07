@@ -43,49 +43,48 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
   const model = "gemini-2.5-flash"; 
   
-  // STRATEGY:
-  // 1. Strict Source: ESPNcricinfo OR BCCI.tv ONLY. (Explicitly ban Cricbuzz to avoid inconsistencies).
-  // 2. Strict Date/Tournament: Syed Mushtaq Ali Trophy 2025 (SMAT 2025). Start Date: Nov 26, 2025.
-  // 3. Manual Summation: AI must calculate totals from the match log to ensure 100% consistency.
+  // FIXED STRATEGY:
+  // 1. Terminology: Use "2025-26" as the official season name per user instruction.
+  // 2. Search: Keywords 'espncricinfo' and 'bcci'.
+  // 3. Parsing: Explicit examples for low scores (1 run vs 0).
   const prompt = `
-    Act as a strict Cricket Statistician.
+    Act as a Data Parser for Cricket.
     
-    Target Player: "${player.name}"
-    State Team: "${player.smatTeam}"
-    Tournament: "Syed Mushtaq Ali Trophy" (SMAT) - 2025/26 Season.
+    Target: "${player.name}"
+    Team: "${player.smatTeam}"
+    Tournament: "Syed Mushtaq Ali Trophy 2025-26" (Matches playing in Nov/Dec 2025).
     
-    CRITICAL REQUIREMENTS:
-    1. **START DATE**: The tournament fixture for this player's team started on **Nov 26, 2025**.
-       - You MUST include the match played on Nov 26, 2025.
-       - You MUST include ALL matches played after that date.
-       - Ignore any matches from 2024 or earlier.
+    INSTRUCTIONS:
+    1. **SEARCH QUERY**: Execute a search for: 
+       "${player.name} ${player.smatTeam} Syed Mushtaq Ali Trophy 2025-26 match scorecard match log espncricinfo bcci"
     
-    2. **SOURCES**: Use ONLY **espncricinfo.com** or **bcci.tv**.
-       - **DO NOT USE CRICBUZZ.**
-       - **DO NOT USE WIKIPEDIA.**
+    2. **DATA EXTRACTION RULES**:
+       - Look for the list of matches played since **Nov 26, 2025**.
+       - **MISSING GAMES**: Be careful. Do not skip games. Look for matches played on dates like Nov 23, Nov 25, Nov 27, Nov 29, Dec 2, Dec 6 (Dates vary by group).
+       - **SCORE PARSING**:
+         - "1(5)" means **1 Run**. It is NOT 0.
+         - "0(2)" means **0 Runs**.
+         - "DNB" means Did Not Bat (0 Runs, 0 Innings).
+         - "3/24" means 3 Wickets for 24 runs.
        
-    3. **METHODOLOGY**:
-       - Search for: "site:espncricinfo.com OR site:bcci.tv ${player.name} ${player.smatTeam} Syed Mushtaq Ali Trophy 2025 match log"
-       - Extract the specific score for EVERY match found since Nov 26, 2025.
-       - **CALCULATE TOTALS MANUALLY**: Sum the runs and wickets from your extracted list. Do not trust the "Total" row on the webpage as it might be cached.
-    
-    4. **CONSISTENCY CHECK**:
-       - Ensure the "matches" count equals the number of items in "recentMatches".
-       - Ensure the "runs" total equals the sum of runs in "recentMatches".
+    3. **CALCULATION**:
+       - Extract the performance for EACH match found.
+       - Sum them up manually.
+       - If the search result has a "Total" row, verify it against your sum. If they differ, trust the sum of the individual match logs.
 
-    OUTPUT (Strict JSON):
+    OUTPUT SCHEMA (JSON Only):
     {
       "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
       "matches": number, 
       "innings": number,
-      "runs": number, // MUST equal sum of recentMatches runs
+      "runs": number, 
       "ballsFaced": number,
       "battingAverage": number, 
       "battingStrikeRate": number, 
       "highestScore": string, 
 
       "overs": number,
-      "wickets": number, // MUST equal sum of recentMatches wickets
+      "wickets": number, 
       "runsConceded": number,
       "economy": number,
       "bowlingAverage": number,
@@ -94,12 +93,12 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
       "recentMatches": [
          { 
-           "date": "MMM DD", // e.g. "Nov 26"
+           "date": "MMM DD", 
            "opponent": "vs TeamName", 
-           "performance": "e.g. '12(8) & 0/20(4)' or 'DNB'" 
+           "performance": "e.g. '1(6) & 0/12' or 'DNB'" 
          }
       ],
-      "summary": "One sentence summary mentioning the source used."
+      "summary": "Brief stats summary."
     }
   `;
 
