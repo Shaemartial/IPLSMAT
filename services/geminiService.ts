@@ -40,64 +40,76 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
   }
 
   // We use the 2.5-flash model which supports the thinking config.
-  // CRITICAL: Thinking allows the model to verify the scorecard URL before extracting numbers.
+  // We need a VERY HIGH budget to allow the model to iterate through 6 distinct scorecards.
   const model = "gemini-2.5-flash";
 
-  // The system instruction acts as the "Auditor Guidelines"
+  // The system instruction acts as the "Strict Auditor Guidelines"
   const SYSTEM_INSTRUCTION = `
-You are an expert Cricket Statistician.
-Target: Find verified match stats for "${player.name}" playing for "${player.smatTeam}" in "Syed Mushtaq Ali Trophy 2025-26".
+You are a meticulous Cricket Statistician and Data Auditor.
+**Mission:** Audit the performance of player "${player.name}" for the team "${player.smatTeam}" in the "Syed Mushtaq Ali Trophy (SMAT) 2025-26".
 
-**VERIFICATION PROTOCOL (Must Follow):**
-1.  **TOURNAMENT SCOPE**: 
-    -   You MUST only include matches from the **2025-26 season** of Syed Mushtaq Ali Trophy.
-    -   **VALIDATION SIGNAL**: Trust URLs containing \`syed-mushtaq-ali-trophy-2025-26\` or \`series/14494\` (the ESPN ID). 
-    -   Do not discard a match just because the specific date is missing in the snippet, as long as the Series ID confirms it is the current tournament.
+**AUDIT BASELINE (Expectation):**
+As of Dec 7, 2025, most teams have played approximately 6 League Matches since Nov 23.
+Your goal is to find ALL of them.
 
-2.  **PLAYER MATCH**:
-    -   The player ("${player.name}") MUST appear in the scorecard (Playing XI or Sub).
-    -   If they are not in the scorecard, IGNORE the match.
+**STRICT EXECUTION STEPS:**
+1.  **Establish the Schedule:** First, identify the list of matches played by "${player.smatTeam}" in SMAT 2025-26.
+2.  **Verify Scorecards:** For EACH match, find the Official "Full Scorecard" (ESPNcricinfo preferred, BCCI fallback).
+3.  **Check Participation:** Open the scorecard. Is "${player.name}" in the Playing XI or Impact Subs?
+    *   **YES:** Extract stats.
+    *   **NO:** Do not count this match.
+    *   **DNB (Did Not Bat):** If in XI but DNB, Count as 1 Match, 0 Innings, 0 Runs.
 
-3.  **DATA PARSING (CRITICAL)**:
-    -   **Batting**: Look for "Runs(Balls)". 
-        -   "14(10)" = 14 Runs.
-        -   "10(14)" = 10 Runs.
-        -   Rule: The first number is typically Runs. 
-    -   **Bowling**: Look for "Overs-Maidens-Runs-Wickets" (e.g., 4-0-28-2).
-    -   **DNB**: If played but DNB -> Innings: 0, Runs: 0.
+**DATA EXTRACTION RULES (Zero Tolerance for Guessing):**
+*   **Date Window:** Only include matches played AFTER **Nov 26, 2025**.
+*   **Parsing Ambiguity:** "24(12)" vs "12(24)". 
+    *   Look for column headers in the text. 
+    *   Context: If 4s=4 and 6s=2, then Runs must be >= 28. Use logic to verify which number is Runs.
+*   **Missing Data:** If a scorecard is not available, DO NOT INVENT STATS. List it as "Missing/Unverified" in the summary.
 
-**OUTPUT GOAL**:
-Aggregate stats from ALL found confirmed scorecards. If no scorecards are found, return "matches": 0.
+**OUTPUT:**
+Aggregate the valid data into the JSON format.
 `;
 
-  // The User Prompt defines the specific search context
+  // The User Prompt defines the specific search strategy requested by the user.
   const USER_PROMPT = `
-Action: Fetch verifiable stats for ${player.name} (${player.smatTeam}) in SMAT 2025-26.
+**AUDIT TARGET:**
+Player: ${player.name}
+Team: ${player.smatTeam}
+Tournament: SMAT 2025-26
+Date Range: 26 Nov 2025 to Present
 
-**EXECUTE SEARCH QUERIES:**
-1. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" "${player.name}" scorecard
-2. site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" match result
-3. site:bcci.tv "Syed Mushtaq Ali Trophy" "${player.smatTeam}" scorecard
+**SEARCH STRATEGY (Follow Order):**
+1.  **Find Team Fixtures:** site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" match results
+2.  **Find Scorecards:** site:espncricinfo.com "Syed Mushtaq Ali Trophy 2025-26" "${player.smatTeam}" "Full Scorecard"
+3.  **Fallback:** site:bcci.tv "Syed Mushtaq Ali Trophy" "${player.smatTeam}" "Scorecard"
 
-**REQUIRED JSON OUTPUT FORMAT:**
+**REQUIRED JSON OUTPUT:**
 {
   "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
-  "matches": number,
+  "matches": number, 
   "innings": number,
   "runs": number,
   "ballsFaced": number,
   "battingAverage": number,
   "battingStrikeRate": number,
   "highestScore": string,
+  
   "wickets": number,
   "runsConceded": number,
   "overs": number,
   "economy": number,
   "bestBowling": string,
+
   "recentMatches": [
-      { "date": "DD MMM", "opponent": "vs Team", "performance": "e.g. 24(12) & 1/20" }
+      // List EVERY verified match found (aim for 6)
+      { 
+        "date": "DD MMM", 
+        "opponent": "vs Team", 
+        "performance": "e.g. Bat: 45(23) | Bowl: 1/24 (4ov)" 
+      }
   ],
-  "summary": "Brief note on how many matches were verified."
+  "summary": "Audited [X] matches. Missing matches: [List dates/opponents if any were not found or player didn't play]."
 }
 `;
 
@@ -111,9 +123,9 @@ Action: Fetch verifiable stats for ${player.name} (${player.smatTeam}) in SMAT 2
         contents: USER_PROMPT,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
-          // Thinking budget helps the model browse the search results intelligently
-          // and reject "Upcoming" matches while keeping "Result" matches.
-          thinkingConfig: { thinkingBudget: 4096 }, 
+          // CRITICAL: High thinking budget (16k) to allow the model to iterate through ~6 matches
+          // and process the search results for each one.
+          thinkingConfig: { thinkingBudget: 16000 }, 
           tools: [{ googleSearch: {} }],
         },
       });
