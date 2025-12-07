@@ -172,12 +172,15 @@ const PlayerCard: React.FC<PlayerCardProps> = ({ player, onUpdate }) => {
             {/* Recent Match History */}
             {stats.recentMatches && stats.recentMatches.length > 0 && (
               <div className="mt-4">
-                 <h4 className="text-[10px] font-bold text-slate-500 uppercase mb-2">Recent Form</h4>
+                 <h4 className="text-[10px] font-bold text-slate-500 uppercase mb-2">Tournament Match Log (Since Nov 26)</h4>
                  <div className="space-y-1">
                     {stats.recentMatches.map((match, idx) => (
                       <div key={idx} className="flex justify-between items-center bg-slate-900/40 px-3 py-2 rounded text-xs border border-slate-800">
-                        <span className="text-slate-400">{match.opponent}</span>
-                        <span className="font-mono text-white font-medium">{match.performance}</span>
+                        <div className="flex flex-col">
+                           <span className="text-[9px] text-slate-500 font-mono mb-0.5">{match.date}</span>
+                           <span className="text-slate-300 font-medium">{match.opponent}</span>
+                        </div>
+                        <span className="font-mono text-white text-right ml-2">{match.performance}</span>
                       </div>
                     ))}
                  </div>

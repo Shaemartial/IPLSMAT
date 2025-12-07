@@ -43,41 +43,58 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
   const model = "gemini-2.5-flash"; 
   
+  // Updated prompt to enforce full tournament coverage since Nov 26
   const prompt = `
-    Search for the latest cricket statistics for "${player.name}" playing for the team "${player.smatTeam}" in the "Syed Mushtaq Ali Trophy 2025-26" (SMAT) T20 tournament.
+    Act as a Cricket Data Analyst.
     
-    I need:
-    1. A determined Role (Batsman, Bowler, All-Rounder, Wicket Keeper) based on their activity in this tournament.
-    2. CUMULATIVE STATS for the 2025-26 season.
-    3. RECENT MATCH SCORES (Last 3-5 matches).
+    Target Player: "${player.name}"
+    State Team: "${player.smatTeam}"
+    Tournament: "Syed Mushtaq Ali Trophy 2025-26" (SMAT).
     
+    CONTEXT:
+    The tournament matches started on Nov 26. Most teams have played roughly 6 matches so far.
+    
+    TASK:
+    1. Search for the COMPLETE list of matches played by "${player.smatTeam}" in this tournament starting from Nov 26.
+    2. For EVERY single match found, check if "${player.name}" was in the playing XI.
+    3. If they played, extract their exact batting (runs, balls) and bowling (wickets, runs, overs) figures.
+    
+    CRITICAL: 
+    - Do NOT just give me the last 3 matches. I need ALL matches since Nov 26.
+    - If the player did not bat or bowl in a match they played, note it as "DNB" or "0/0".
+    
+    OUTPUT:
     Return a strictly valid JSON object with this schema:
     {
-      "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
-      "matches": number,
+      "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper", // Determine based on performance
+      "matches": number, // Total matches played by the player
       
-      // Batting (if applicable, else null)
-      "innings": number | null,
-      "runs": number | null,
-      "ballsFaced": number | null,
-      "battingAverage": number | null,
-      "battingStrikeRate": number | null,
-      "highestScore": string | null, // e.g., "82*"
+      // Cumulative Stats (Sum of all matches found)
+      "innings": number,
+      "runs": number,
+      "ballsFaced": number,
+      "battingAverage": number, 
+      "battingStrikeRate": number, 
+      "highestScore": string, 
 
-      // Bowling (if applicable, else null)
-      "overs": number | null,
-      "wickets": number | null,
-      "runsConceded": number | null,
-      "economy": number | null,
-      "bowlingAverage": number | null,
-      "bowlingStrikeRate": number | null,
-      "bestBowling": string | null, // e.g. "4/20"
+      // Cumulative Bowling
+      "overs": number,
+      "wickets": number,
+      "runsConceded": number,
+      "economy": number,
+      "bowlingAverage": number,
+      "bowlingStrikeRate": number,
+      "bestBowling": string,
 
-      // History
+      // Full Match Log (Must include ALL matches found since Nov 26)
       "recentMatches": [
-         { "opponent": "vs TeamName", "performance": "Short summary string e.g., '45(23)' or '2/24 & 10(5)'" }
+         { 
+           "date": "MMM DD", // e.g. "Nov 26"
+           "opponent": "vs TeamName", 
+           "performance": "e.g. 'Bat: 12(8) | Bowl: 1/24(4)'" 
+         }
       ],
-      "summary": "One sentence summary of their form."
+      "summary": "Brief summary of their form in this tournament."
     }
   `;
 
