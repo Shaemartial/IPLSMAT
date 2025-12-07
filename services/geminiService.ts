@@ -43,47 +43,36 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
   const model = "gemini-2.5-flash"; 
   
-  // STRATEGY: FIXTURE-FIRST DISCOVERY
-  // Instead of asking "How did Player X do?", we ask "What are the results for Team Y?".
-  // Then we map Player X to those results. This ensures we don't miss games where the player failed or was quiet.
+  // FINAL RECOVERY STRATEGY: AUTHORITY SOURCE ONLY
+  // The previous method "guessed" games. This method forces the AI to look at 
+  // trusted databases (ESPNcricinfo, Cricbuzz, BCCI) and only report what it sees.
   
   const prompt = `
-    Act as a strict Cricket Data Auditor.
+    You are a data extraction engine for Cricket Stats.
     
-    **OBJECTIVE**: 
-    Build a COMPLETE match log for Player: "${player.name}" 
-    Playing for Team: "${player.smatTeam}" 
-    Tournament: Syed Mushtaq Ali Trophy 2025 (SMAT).
+    TARGET PLAYER: "${player.name}"
+    TEAM: "${player.smatTeam}"
+    TOURNAMENT: Syed Mushtaq Ali Trophy 2025 (SMAT)
+    DATE RANGE: Nov 2025 - Dec 2025
 
-    **THE PROBLEM**: 
-    Simple searches often miss games. You must verify the FULL schedule.
-
-    **YOUR EXECUTION PLAN (Fixture-First Strategy)**:
-    1.  **STEP 1: FIND THE TEAM SCHEDULE**
-        - Search for the full list of match results for the team "**${player.smatTeam}**" in SMAT 2025 (Nov & Dec).
-        - Teams in this tournament typically play 5 to 7 Group Matches. 
-        - Find the results for ALL of them.
+    **YOUR TASK:**
+    1. Search SPECIFICALLY for the scorecard profile on trusted sites.
+    2. Extract the exact scores from the most recent matches.
     
-    2.  **STEP 2: CHECK PLAYER PARTICIPATION**
-        - For *each* match found in Step 1, check the scorecard.
-        - Did **${player.name}** play? 
-        - If YES: Extract runs, balls, wickets, overs.
-        - If NO: Ignore the match.
+    **SEARCH QUERY:**
+    site:espncricinfo.com OR site:cricbuzz.com OR site:bcci.tv "${player.name}" "${player.smatTeam}" Syed Mushtaq Ali Trophy 2025 scorecard
 
-    3.  **STEP 3: COMPILE STATS**
-        - Sum the data from the matches found.
-        - **DO NOT** rely on pre-calculated "Total" rows from websites as they might be outdated. Calculate the sum yourself.
+    **CRITICAL RULES (ZERO HALLUCINATION):**
+    1. **NO PREDICTIONS**: Ignore "Fantasy Tips", "Predicted XI", or "Dream11" articles. They contain fake stats.
+    2. **STRICT MATCHING**: Only log a match if you see a **Scorecard Result**.
+    3. **RUNS vs BALLS**: 
+       - Text "14(10)" means **14 Runs** (10 Balls).
+       - Text "10(14)" means **10 Runs** (14 Balls).
+       - ALWAYS prioritize the first number as Runs unless the text explicitly says "10 runs off 14 balls".
+    4. **DNB (Did Not Bat)**: If a player played but didn't bat, Runs = 0, Innings = 0.
+    5. **NO FAKE GAMES**: If the search results only show 2 games, output 2 games. Do not invent a 3rd game to fill space.
 
-    **SEARCH QUERY**:
-    "${player.smatTeam} cricket team Syed Mushtaq Ali Trophy 2025 match results scorecard ${player.name}"
-
-    **STRICT PARSING RULES**:
-    - **Format**: T20 Only (Exclude Ranji/Hazare).
-    - **Dates**: Nov 2025 - Dec 2025.
-    - **Batting**: "14(10)" = 14 Runs. "0(3)" = 0 Runs. "DNB" = 0 Runs, 0 Innings.
-    - **Bowling**: "3/20" = 3 Wickets. "0/40" = 0 Wickets.
-    
-    **OUTPUT JSON**:
+    **OUTPUT JSON FORMAT:**
     {
       "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
       "matches": number, 
@@ -102,12 +91,12 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
       "recentMatches": [
          { 
-           "date": "MMM DD", 
-           "opponent": "vs TeamName", 
+           "date": "Date/Month", 
+           "opponent": "vs Team", 
            "performance": "e.g. 45(30) & 0/15" 
          }
       ],
-      "summary": "Brief summary. Mention if they missed any games."
+      "summary": "One sentence summary of verified matches."
     }
   `;
 
