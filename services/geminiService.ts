@@ -43,36 +43,51 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
 
   const model = "gemini-2.5-flash"; 
   
-  // FIXED STRATEGY:
-  // 1. Terminology: Use "2025-26" as the official season name per user instruction.
-  // 2. Search: Keywords 'espncricinfo' and 'bcci'.
-  // 3. Parsing: Explicit examples for low scores (1 run vs 0).
+  // STRATEGY ADJUSTMENT:
+  // 1. Explicitly list POTENTIAL dates to help AI 'hunt' for missing games in the text.
+  // 2. Broaden search to "2025" to catch all variations of "2025/26" or "2025 season".
+  // 3. Force "Deep Scan" instruction.
+  
   const prompt = `
-    Act as a Data Parser for Cricket.
+    Act as a Cricket Statistician.
     
-    Target: "${player.name}"
-    Team: "${player.smatTeam}"
-    Tournament: "Syed Mushtaq Ali Trophy 2025-26" (Matches playing in Nov/Dec 2025).
-    
-    INSTRUCTIONS:
-    1. **SEARCH QUERY**: Execute a search for: 
-       "${player.name} ${player.smatTeam} Syed Mushtaq Ali Trophy 2025-26 match scorecard match log espncricinfo bcci"
-    
-    2. **DATA EXTRACTION RULES**:
-       - Look for the list of matches played since **Nov 26, 2025**.
-       - **MISSING GAMES**: Be careful. Do not skip games. Look for matches played on dates like Nov 23, Nov 25, Nov 27, Nov 29, Dec 2, Dec 6 (Dates vary by group).
-       - **SCORE PARSING**:
-         - "1(5)" means **1 Run**. It is NOT 0.
-         - "0(2)" means **0 Runs**.
-         - "DNB" means Did Not Bat (0 Runs, 0 Innings).
-         - "3/24" means 3 Wickets for 24 runs.
-       
-    3. **CALCULATION**:
-       - Extract the performance for EACH match found.
-       - Sum them up manually.
-       - If the search result has a "Total" row, verify it against your sum. If they differ, trust the sum of the individual match logs.
+    TARGET: "${player.name}"
+    TEAM: "${player.smatTeam}"
+    TOURNAMENT: Syed Mushtaq Ali Trophy 2025/26 (Matches in Nov-Dec 2025).
 
-    OUTPUT SCHEMA (JSON Only):
+    **CRITICAL GOAL**:
+    You must find the COMPLETE list of matches played by this player in this tournament.
+    Teams usually play 6-7 Group Matches.
+    Common Match Dates in this schedule (Check text for these dates):
+    - Nov 23
+    - Nov 25 / Nov 26
+    - Nov 27 / Nov 28
+    - Nov 29 / Nov 30
+    - Dec 2 / Dec 3
+    - Dec 5 / Dec 6
+    - Dec 9 (Knockouts)
+
+    **INSTRUCTIONS**:
+    1. **SEARCH**: 
+       Execute a search for: "${player.name} ${player.smatTeam} Syed Mushtaq Ali Trophy 2025 matches score list espncricinfo bcci"
+    
+    2. **EXTRACTION**:
+       - Scan the search results for ANY of the dates listed above.
+       - **DO NOT STOP** after finding 1 or 2 matches. Look for the full history.
+       - If a match happened on Dec 2, Dec 6, etc., it MUST be included.
+       - Ignore matches from previous years (2024 or earlier). Only Nov/Dec 2025.
+    
+    3. **PARSING RULES**:
+       - **1 Run**: "1(5)" or "1" -> 1 Run. (Do not confuse with 0).
+       - **0 Runs**: "0(4)" or "duck" -> 0 Runs.
+       - **Wickets**: "3/24" -> 3 Wickets.
+       - **DNB**: Did Not Bat -> 0 Runs, 0 Innings.
+    
+    4. **CALCULATION**:
+       - Sum the Runs and Wickets from the extracted list MANUALLY.
+       - Do NOT rely on the "Total" row from the site as it might be outdated. Calculate: Sum(Match 1 + Match 2 + ...).
+
+    OUTPUT (JSON):
     {
       "role": "Batsman" | "Bowler" | "All-Rounder" | "Wicket Keeper",
       "matches": number, 
@@ -98,7 +113,7 @@ export const fetchLatestPlayerStats = async (player: Player): Promise<{ stats: P
            "performance": "e.g. '1(6) & 0/12' or 'DNB'" 
          }
       ],
-      "summary": "Brief stats summary."
+      "summary": "Brief stats summary (e.g. 'Played 5 matches, consistent wicket-taker')."
     }
   `;
 
